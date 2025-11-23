@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework.renderers import JSONRenderer  # 👈 add this
 from .models import Conversation, Message, User
 from .serializers import ConversationSerializer, MessageSerializer
-
+from .permissions import IsParticipantOfConversation
 
 class ConversationViewSet(viewsets.ModelViewSet):
     queryset = Conversation.objects.all()
@@ -30,3 +30,13 @@ class MessageViewSet(viewsets.ModelViewSet):
         sender = User.objects.get(user_id=sender_id)
         conversation = Conversation.objects.get(conversation_id=conversation_id)
         serializer.save(sender=sender, conversation=conversation)
+
+class MessageViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsParticipantOfConversation]
+
+pagination_class = MessagePagination
+
+from django_filters.rest_framework import DjangoFilterBackend
+
+filter_backends = [DjangoFilterBackend]
+filterset_class = MessageFilter

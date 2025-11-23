@@ -1,46 +1,25 @@
-from rest_framework import viewsets, status
-from rest_framework.response import Response
-from rest_framework.renderers import JSONRenderer  # 👈 add this
-from .models import Conversation, Message, User
-from .serializers import ConversationSerializer, MessageSerializer
-from .permissions import IsParticipantOfConversation
+# chats/views.py
+from rest_framework import viewsets, permissions
+from rest_framework.pagination import PageNumberPagination  # Fallback
+from django_filters.rest_framework import DjangoFilterBackend
+from .models import Message, Chat  # Adjust if needed
+from .serializers import MessageSerializer, ChatSerializer  # Assuming these exist
 from .filters import MessageFilter
 from .pagination import MessagePagination
-
-
-
-class ConversationViewSet(viewsets.ModelViewSet):
-    queryset = Conversation.objects.all()
-    serializer_class = ConversationSerializer
-    renderer_classes = [JSONRenderer]  # 👈 force JSON only
-
-    def create(self, request, *args, **kwargs):
-        participant_ids = request.data.get('participants', [])
-        conversation = Conversation.objects.create()
-        users = User.objects.filter(user_id__in=participant_ids)
-        conversation.participants.set(users)
-        serializer = self.get_serializer(conversation)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
+from .permissions import IsOwnerOrReadOnly  # From your earlier fix
 
 class MessageViewSet(viewsets.ModelViewSet):
-    queryset = Message.objects.all()
+    queryset = Message.objects.all().order_by('-created_at')  # Order for paginated lists
     serializer_class = MessageSerializer
-    renderer_classes = [JSONRenderer]  # 👈 force JSON only
+    pagination_class = MessagePagination  # 20/page
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = MessageFilter
+    permission_classes = [permissions.IsAuthenticated, IsOwnerOrReadOnly]
 
-    def perform_create(self, serializer):
-        sender_id = self.request.data.get('sender')
-        conversation_id = self.request.data.get('conversation')
-        sender = User.objects.get(user_id=sender_id)
-        conversation = Conversation.objects.get(conversation_id=conversation_id)
-        serializer.save(sender=sender, conversation=conversation)
-
-class MessageViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsParticipantOfConversation]
-
-pagination_class = MessagePagination
-
-from django_filters.rest_framework import DjangoFilterBackend
-
-filter_backends = [DjangoFilterBackend]
-filterset_class = MessageFilter
+class ChatViewSet(viewsets.ModelViewSet):
+    queryset = Chat.objects.all()
+    serializer_class = ChatSerializer
+    pagination_class = MessagePagination  # Reuse for chats if needed
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = MessageFilter  # Or ChatFilter if separate
+    permission_classes = [permissions.IsAuthenticated, IsOwnerOrReadOnly]

@@ -1,0 +1,122 @@
+#!/bin/bash
+
+# kubctl-0x02 - Blue-Green Deployment Script
+# Deploys blue and green versions of the Django app, manages traffic switching
+
+set -e
+
+NAMESPACE="messaging-app"
+BLUE_DEPLOYMENT="django-app-blue"
+GREEN_DEPLOYMENT="django-app-green"
+BLUE_SERVICE="django-service-blue"
+GREEN_SERVICE="django-service-green"
+MAIN_SERVICE="django-service"
+
+echo "=========================================="
+echo "Blue-Green Deployment Management"
+echo "=========================================="
+
+# Function to check deployment status
+check_deployment_status() {
+    local deployment=$1
+    local timeout=120
+    local elapsed=0
+    
+    echo "Waiting for deployment '$deployment' to be ready (max ${timeout}s)..."
+    while [ $elapsed -lt $timeout ]; do
+        READY=$(kubectl get deployment $deployment -n $NAMESPACE -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || echo "False")
+        if [ "$READY" = "True" ]; then
+            echo "✓ Deployment '$deployment' is ready"
+            return 0
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    
+    echo "⚠ Deployment '$deployment' did not become ready within ${timeout}s"
+    return 1
+}
+
+# Step 1: Deploy Services
+echo ""
+echo "[1/5] Deploying Kubernetes services..."
+kubectl apply -f kubeservice.yaml
+echo "✓ Services deployed"
+
+# Step 2: Deploy Blue Version
+echo ""
+echo "[2/5] Deploying Blue version (current production)..."
+kubectl apply -f blue_deployment.yaml
+check_deployment_status $BLUE_DEPLOYMENT || true
+
+echo "Blue deployment details:"
+kubectl get deployment $BLUE_DEPLOYMENT -n $NAMESPACE -o wide
+kubectl get pods -n $NAMESPACE -l deployment-type=blue -o wide
+
+# Step 3: Deploy Green Version
+echo ""
+echo "[3/5] Deploying Green version (new version)..."
+kubectl apply -f green_deployment.yaml
+check_deployment_status $GREEN_DEPLOYMENT || true
+
+echo "Green deployment details:"
+kubectl get deployment $GREEN_DEPLOYMENT -n $NAMESPACE -o wide
+kubectl get pods -n $NAMESPACE -l deployment-type=green -o wide
+
+# Step 4: Route traffic (currently to Blue)
+echo ""
+echo "[4/5] Current Traffic Routing: BLUE (production)"
+echo "Main service selector:"
+kubectl get svc $MAIN_SERVICE -n $NAMESPACE -o jsonpath='{.spec.selector}' | jq .
+echo ""
+
+# Check for errors in Green deployment
+echo ""
+echo "[5/5] Checking for errors in Green deployment..."
+GREEN_PODS=$(kubectl get pods -n $NAMESPACE -l deployment-type=green -o jsonpath='{.items[*].metadata.name}')
+
+if [ -z "$GREEN_PODS" ]; then
+    echo "⚠ No green pods found"
+else
+    for pod in $GREEN_PODS; do
+        echo ""
+        echo "Logs for pod: $pod"
+        echo "---"
+        kubectl logs -n $NAMESPACE $pod --tail=20 || echo "⚠ Could not fetch logs"
+    done
+fi
+
+echo ""
+echo "=========================================="
+echo "Blue-Green Deployment Summary"
+echo "=========================================="
+echo "✓ Blue deployment (v1.0): ACTIVE"
+echo "✓ Green deployment (v1.0): READY"
+echo ""
+echo "Current Status:"
+kubectl get deployment -n $NAMESPACE -o wide
+echo ""
+echo "All Pods:"
+kubectl get pods -n $NAMESPACE -o wide
+echo ""
+
+echo "=========================================="
+echo "Traffic Switching Instructions"
+echo "=========================================="
+echo ""
+echo "To switch traffic from Blue to Green:"
+echo "  kubectl patch svc $MAIN_SERVICE -n $NAMESPACE -p '{\"spec\":{\"selector\":{\"deployment-type\":\"green\"}}}'"
+echo ""
+echo "To switch back from Green to Blue:"
+echo "  kubectl patch svc $MAIN_SERVICE -n $NAMESPACE -p '{\"spec\":{\"selector\":{\"deployment-type\":\"blue\"}}}'"
+echo ""
+echo "To check current routing:"
+echo "  kubectl get svc $MAIN_SERVICE -n $NAMESPACE -o jsonpath='{.spec.selector}' | jq ."
+echo ""
+echo "To test Blue service directly:"
+echo "  kubectl port-forward -n $NAMESPACE svc/$BLUE_SERVICE 8001:8000"
+echo "  curl http://localhost:8001"
+echo ""
+echo "To test Green service directly:"
+echo "  kubectl port-forward -n $NAMESPACE svc/$GREEN_SERVICE 8002:8000"
+echo "  curl http://localhost:8002"

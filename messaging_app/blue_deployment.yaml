@@ -1,0 +1,95 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: messaging-app
+  labels:
+    name: messaging-app
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: django-app-blue
+  namespace: messaging-app
+  labels:
+    app: django-messaging-app
+    version: blue
+    deployment-type: blue
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: django-messaging-app
+      deployment-type: blue
+  template:
+    metadata:
+      labels:
+        app: django-messaging-app
+        version: blue
+        deployment-type: blue
+    spec:
+      containers:
+      - name: django-container
+        image: django-messaging-app:2.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        env:
+        - name: DEBUG
+          value: "True"
+        - name: DJANGO_SETTINGS_MODULE
+          value: "messaging_app.settings"
+        - name: DEPLOYMENT_VERSION
+          value: "blue-2.0"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health/
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready/
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: django-config
+          optional: true
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: django-config
+  namespace: messaging-app
+data:
+  ALLOWED_HOSTS: "localhost,127.0.0.1,django-service"
+  DATABASE_URL: "sqlite:///db.sqlite3"
+  VERSION: "blue-2.0"

@@ -1,0 +1,155 @@
+#!/bin/bash
+
+# kubctl-0x03 - Rolling Update Script
+# Applies updated deployment, monitors rolling update progress, tests for downtime
+
+set -e
+
+NAMESPACE="messaging-app"
+DEPLOYMENT="django-app-blue"
+SERVICE="django-service"
+TEST_ENDPOINT="http://localhost:8000/"
+TEST_DURATION=120
+TEST_INTERVAL=1
+
+echo "=========================================="
+echo "Rolling Update Verification"
+echo "=========================================="
+
+# Step 1: Show current deployment status before update
+echo ""
+echo "[1/5] Current Deployment Status (before update):"
+echo "=================================================="
+kubectl get deployment $DEPLOYMENT -n $NAMESPACE -o wide
+echo ""
+kubectl get pods -n $NAMESPACE -l deployment-type=blue -o wide
+echo ""
+
+# Step 2: Apply updated deployment (with image version 2.0)
+echo "[2/5] Applying Updated Deployment (v2.0)..."
+echo "=================================================="
+kubectl apply -f blue_deployment.yaml
+echo "✓ Updated deployment applied"
+echo ""
+
+# Step 3: Monitor rolling update progress
+echo "[3/5] Monitoring Rolling Update Progress..."
+echo "=================================================="
+echo "Waiting for rolling update to complete (max 300s)..."
+echo ""
+
+if kubectl rollout status deployment/$DEPLOYMENT -n $NAMESPACE --timeout=300s; then
+    echo "✓ Rolling update completed successfully"
+else
+    echo "⚠ Rolling update status check timed out or failed"
+fi
+
+echo ""
+
+# Step 4: Background load testing with curl
+echo "[4/5] Testing for Downtime with Continuous Requests..."
+echo "=================================================="
+
+# Setup port forward in background
+echo "Setting up port forwarding..."
+kubectl port-forward -n $NAMESPACE svc/$SERVICE 8000:8000 > /dev/null 2>&1 &
+PORT_FORWARD_PID=$!
+sleep 2
+
+# Test endpoint availability during and after update
+echo "Running continuous HTTP requests for ${TEST_DURATION} seconds..."
+echo "Testing endpoint: $TEST_ENDPOINT"
+echo ""
+
+SUCCESS_COUNT=0
+FAIL_COUNT=0
+START_TIME=$(date +%s)
+CURRENT_TIME=$START_TIME
+
+while [ $((CURRENT_TIME - START_TIME)) -lt $TEST_DURATION ]; do
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" $TEST_ENDPOINT 2>/dev/null || echo "000")
+    CURRENT_TIME=$(date +%s)
+    ELAPSED=$((CURRENT_TIME - START_TIME))
+    
+    if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "404" ]; then
+        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+        echo "[$ELAPSED s] ✓ HTTP $HTTP_CODE - OK"
+    else
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        echo "[$ELAPSED s] ✗ HTTP $HTTP_CODE - FAILED"
+    fi
+    
+    sleep $TEST_INTERVAL
+done
+
+# Kill port forwarding
+kill $PORT_FORWARD_PID 2>/dev/null || true
+wait $PORT_FORWARD_PID 2>/dev/null || true
+
+echo ""
+echo "=========================================="
+echo "Downtime Analysis:"
+echo "=========================================="
+TOTAL_REQUESTS=$((SUCCESS_COUNT + FAIL_COUNT))
+AVAILABILITY=$((SUCCESS_COUNT * 100 / TOTAL_REQUESTS))
+echo "Total Requests: $TOTAL_REQUESTS"
+echo "Successful: $SUCCESS_COUNT"
+echo "Failed: $FAIL_COUNT"
+echo "Availability: ${AVAILABILITY}%"
+echo ""
+
+if [ $FAIL_COUNT -eq 0 ]; then
+    echo "✓ ZERO DOWNTIME: All requests succeeded during rolling update"
+else
+    echo "⚠ WARNING: ${FAIL_COUNT} failed requests during rolling update"
+fi
+
+echo ""
+
+# Step 5: Verify updated pods are running
+echo "[5/5] Verifying Updated Pods..."
+echo "=================================================="
+echo "Current Deployment Status (after update):"
+kubectl get deployment $DEPLOYMENT -n $NAMESPACE -o wide
+echo ""
+
+echo "Current Pods:"
+PODS=$(kubectl get pods -n $NAMESPACE -l deployment-type=blue -o name)
+for pod in $PODS; do
+    POD_NAME=$(echo $pod | sed 's/pod\///')
+    echo ""
+    echo "Pod: $POD_NAME"
+    echo "Image: $(kubectl get pod $POD_NAME -n $NAMESPACE -o jsonpath='{.spec.containers[0].image}')"
+    echo "Status: $(kubectl get pod $POD_NAME -n $NAMESPACE -o jsonpath='{.status.phase}')"
+    echo "Ready: $(kubectl get pod $POD_NAME -n $NAMESPACE -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')"
+done
+
+echo ""
+echo "=========================================="
+echo "Rolling Update Summary"
+echo "=========================================="
+echo ""
+echo "Deployment: $DEPLOYMENT"
+echo "Namespace: $NAMESPACE"
+echo "New Image Version: 2.0"
+echo ""
+echo "Rollout History:"
+kubectl rollout history deployment/$DEPLOYMENT -n $NAMESPACE
+echo ""
+
+echo "=========================================="
+echo "Rollback Instructions (if needed)"
+echo "=========================================="
+echo ""
+echo "To rollback to previous version:"
+echo "  kubectl rollout undo deployment/$DEPLOYMENT -n $NAMESPACE"
+echo ""
+echo "To view rollout history:"
+echo "  kubectl rollout history deployment/$DEPLOYMENT -n $NAMESPACE"
+echo ""
+echo "To pause/resume rollout:"
+echo "  kubectl rollout pause deployment/$DEPLOYMENT -n $NAMESPACE"
+echo "  kubectl rollout resume deployment/$DEPLOYMENT -n $NAMESPACE"
+echo ""
+echo "To check rollout status:"
+echo "  kubectl rollout status deployment/$DEPLOYMENT -n $NAMESPACE"

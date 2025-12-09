@@ -1,0 +1,58 @@
+# Kubernetes Ingress Setup Commands
+
+# Step 1: Add the Nginx Ingress repository (if using Helm)
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm repo update
+
+# Step 2: Install Nginx Ingress Controller using Helm (recommended method)
+helm install ingress-nginx ingress-nginx/ingress-nginx \
+  --namespace ingress-nginx \
+  --create-namespace \
+  --set controller.service.type=NodePort \
+  --set controller.service.nodePorts.http=30080 \
+  --set controller.service.nodePorts.https=30443
+
+# Alternative: Install Nginx Ingress Controller using kubectl (without Helm)
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
+
+# Step 3: Verify Ingress Controller is running
+kubectl get pods -n ingress-nginx
+kubectl get svc -n ingress-nginx
+
+# Step 4: Create the messaging-app namespace
+kubectl create namespace messaging-app
+
+# Step 5: Deploy the Django application (if not already deployed)
+kubectl apply -f deployment.yaml
+
+# Step 6: Apply the Ingress configuration
+kubectl apply -f ingress.yaml
+
+# Step 7: Verify Ingress is created and has an IP/Port assigned
+kubectl get ingress -n messaging-app
+kubectl describe ingress django-ingress -n messaging-app
+
+# Step 8: For Minikube, get the Ingress IP
+minikube ip
+
+# Step 9: Update your hosts file to map the domain (optional)
+# Add to /etc/hosts (Linux/Mac) or C:\Windows\System32\drivers\etc\hosts (Windows):
+# <minikube-ip> messaging-app.local
+
+# Step 10: Test the Ingress
+# For Minikube:
+minikube service list
+kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8080:80
+
+# Then access: http://localhost:8080
+
+# Step 11: Monitor Ingress logs
+kubectl logs -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx -f
+
+# Step 12: To delete the Ingress
+kubectl delete ingress django-ingress -n messaging-app
+
+# Step 13: To uninstall Nginx Ingress Controller (if needed)
+helm uninstall ingress-nginx -n ingress-nginx
+# or
+kubectl delete -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml

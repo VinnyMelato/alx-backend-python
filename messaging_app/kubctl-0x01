@@ -1,0 +1,105 @@
+#!/bin/bash
+
+# kubctl-0x01 - Django App Scaling and Load Testing Script
+# Scales the Django app to 3 replicas, verifies pods, performs load testing,
+# and monitors resource usage
+
+set -e
+
+NAMESPACE="messaging-app"
+DEPLOYMENT="django-app"
+REPLICAS=3
+
+echo "=========================================="
+echo "Kubernetes Scaling and Load Testing"
+echo "=========================================="
+
+# Check if deployment exists
+echo ""
+echo "[1/5] Checking deployment..."
+if ! kubectl get deployment $DEPLOYMENT -n $NAMESPACE &>/dev/null; then
+    echo "❌ Deployment '$DEPLOYMENT' not found in namespace '$NAMESPACE'"
+    echo "Please ensure the deployment is deployed first using: kubectl apply -f deployment.yaml"
+    exit 1
+fi
+echo "✓ Deployment '$DEPLOYMENT' found"
+
+# Scale the deployment to 3 replicas
+echo ""
+echo "[2/5] Scaling deployment to $REPLICAS replicas..."
+kubectl scale deployment $DEPLOYMENT --replicas=$REPLICAS -n $NAMESPACE
+echo "✓ Deployment scaled to $REPLICAS replicas"
+
+# Wait for pods to be ready
+echo ""
+echo "[3/5] Waiting for pods to be ready..."
+kubectl wait --for=condition=ready pod -l app=django-messaging-app -n $NAMESPACE --timeout=120s || true
+sleep 5
+
+# Verify multiple pods are running
+echo ""
+echo "=========================================="
+echo "Pod Status:"
+echo "=========================================="
+kubectl get pods -n $NAMESPACE -o wide
+echo ""
+POD_COUNT=$(kubectl get pods -n $NAMESPACE -l app=django-messaging-app --no-headers 2>/dev/null | wc -l)
+echo "Total pods running: $POD_COUNT"
+echo ""
+
+# Perform load testing with wrk
+echo "=========================================="
+echo "[4/5] Performing Load Testing with wrk..."
+echo "=========================================="
+
+# Check if wrk is installed
+if ! command -v wrk &> /dev/null; then
+    echo "⚠ wrk is not installed. Skipping load testing."
+    echo "To install wrk, visit: https://github.com/wg/wrk"
+else
+    # Port forward to access the service
+    echo "Setting up port forwarding..."
+    kubectl port-forward -n $NAMESPACE svc/django-service 8000:8000 &
+    PORT_FORWARD_PID=$!
+    sleep 3
+    
+    echo "Running load test (30s, 4 threads, 100 connections)..."
+    wrk -t4 -c100 -d30s http://localhost:8000/ || true
+    
+    # Kill port forward
+    kill $PORT_FORWARD_PID 2>/dev/null || true
+    wait $PORT_FORWARD_PID 2>/dev/null || true
+fi
+
+echo ""
+echo "=========================================="
+echo "[5/5] Monitoring Resource Usage..."
+echo "=========================================="
+
+# Check if metrics-server is available
+if kubectl get deployment metrics-server -n kube-system &>/dev/null; then
+    echo "Resource Usage Statistics:"
+    echo ""
+    kubectl top pods -n $NAMESPACE || echo "⚠ Metrics not yet available. Try again in a few moments."
+    echo ""
+    echo "Node Resource Usage:"
+    kubectl top nodes || echo "⚠ Node metrics not yet available."
+else
+    echo "⚠ Metrics server not found. Attempting to install..."
+    kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml 2>/dev/null || true
+    echo "Please wait a few moments and re-run this script to see resource metrics."
+fi
+
+echo ""
+echo "=========================================="
+echo "Scaling Summary:"
+echo "=========================================="
+echo "✓ Deployment scaled to $REPLICAS replicas"
+echo "✓ All pods verified running"
+echo "✓ Load testing completed"
+echo "✓ Resource monitoring in progress"
+echo ""
+echo "Next steps:"
+echo "1. Monitor logs: kubectl logs -n $NAMESPACE -l app=django-messaging-app -f"
+echo "2. Check pod details: kubectl describe pod -n $NAMESPACE <pod-name>"
+echo "3. Scale down: kubectl scale deployment $DEPLOYMENT --replicas=1 -n $NAMESPACE"

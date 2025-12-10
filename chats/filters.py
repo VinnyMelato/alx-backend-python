@@ -1,6 +1,6 @@
 # chats/filters.py
 import django_filters
-from chats.models import Message
+from .models import Message
 
 
 class MessageFilter(django_filters.FilterSet):
